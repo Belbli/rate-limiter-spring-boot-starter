@@ -41,8 +41,12 @@ public class RedisRateLimiter implements RateLimiter {
         Long requests = redisTemplate.opsForValue().get(key);
         requests = requests == null ? 0 : requests;
         if (requests >= maxRateLimit) return LIMIT_CHECK_RESULT_REQUESTS_LIMIT_EXCEEDED;
-
-        incrementAndExpireKey(key);
+        if (requests == 0) {
+            incrementAndExpireKey(key);
+        }
+        else {
+            redisTemplate.opsForValue().increment(key);
+        }
         return LIMIT_CHECK_RESULT_ALLOW;
     }
 
@@ -51,7 +55,7 @@ public class RedisRateLimiter implements RateLimiter {
             byte[] keyBytes = key.getBytes();
             return List.of(
                     connection.stringCommands().incr(keyBytes),
-                    connection.keyCommands().expire(keyBytes, Duration.ofSeconds(59L).getSeconds())
+                    connection.keyCommands().expire(keyBytes, Duration.ofSeconds(60L).getSeconds())
             );
         });
     }
