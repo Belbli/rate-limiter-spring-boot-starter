@@ -5,10 +5,9 @@ import com.github.belbli.requestlimiter.limiter.RateLimiter;
 import com.github.belbli.requestlimiter.resolver.KeyResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
-import java.time.Duration;
 import java.util.List;
 
 public class RedisRateLimiter implements RateLimiter {
@@ -18,6 +17,7 @@ public class RedisRateLimiter implements RateLimiter {
     private static final LimitCheckResult LIMIT_CHECK_RESULT_ALLOW = new LimitCheckResult(true, "", 200);
     private final RedisTemplate<String, Long> redisTemplate;
     private final KeyResolver keyResolver;
+    private final RedisScript<Boolean> script;
 
     @Value("${rate-limiter.max-rate-limit:10}")
     private Integer maxRateLimit;
@@ -25,9 +25,10 @@ public class RedisRateLimiter implements RateLimiter {
     @Value("${rate-limiter.allow-empty-key:false}")
     private Boolean allowEmptyKey;
 
-    public RedisRateLimiter(RedisTemplate<String, Long> redisTemplate, KeyResolver keyResolver) {
+    public RedisRateLimiter(RedisTemplate<String, Long> redisTemplate, KeyResolver keyResolver, RedisScript<Boolean> script) {
         this.redisTemplate = redisTemplate;
         this.keyResolver = keyResolver;
+        this.script = script;
     }
 
     @Override
@@ -38,26 +39,8 @@ public class RedisRateLimiter implements RateLimiter {
         }
         String key = KEY_FORMAT.formatted(id);
 
-        Long requests = redisTemplate.opsForValue().get(key);
-        requests = requests == null ? 0 : requests;
-        if (requests >= maxRateLimit) return LIMIT_CHECK_RESULT_REQUESTS_LIMIT_EXCEEDED;
-        if (requests == 0) {
-            incrementAndExpireKey(key);
-        }
-        else {
-            redisTemplate.opsForValue().increment(key);
-        }
-        return LIMIT_CHECK_RESULT_ALLOW;
+        return redisTemplate.execute(script, List.of(key), maxRateLimit, 60)
+                ? LIMIT_CHECK_RESULT_ALLOW
+                : LIMIT_CHECK_RESULT_REQUESTS_LIMIT_EXCEEDED;
     }
-
-    private void incrementAndExpireKey(String key) {
-        redisTemplate.execute((RedisCallback<List<Object>>) connection -> {
-            byte[] keyBytes = key.getBytes();
-            return List.of(
-                    connection.stringCommands().incr(keyBytes),
-                    connection.keyCommands().expire(keyBytes, Duration.ofSeconds(60L).getSeconds())
-            );
-        });
-    }
-
 }
